@@ -3,9 +3,18 @@ require 'config.php';
 require_role(['Administrator', 'Receptionist']);
 $page_title = 'Reports'; $active = 'reports.php';
 
+$types = ['payments' => 'Payments', 'outstanding' => 'Outstanding fees', 'students' => 'Students', 'lessons' => 'Lessons', 'results' => 'Test results', 'progress' => 'Student progress'];
 $from = $_GET['from'] ?? date('Y-m-01');
 $to = $_GET['to'] ?? date('Y-m-t');
 $type = $_GET['type'] ?? 'payments';
+if (!is_string($type) || !array_key_exists($type, $types)) {
+    http_response_code(400);
+    exit('Invalid report type.');
+}
+if (!valid_date($from) || !valid_date($to) || $from > $to) {
+    http_response_code(400);
+    exit('Choose a valid date range.');
+}
 
 function report_data($pdo, $type, $from, $to) {
     switch ($type) {
@@ -35,11 +44,19 @@ if (isset($_GET['csv'])) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $type . '_report_' . date('Ymd') . '.csv"');
     $o = fopen('php://output', 'w');
-    if ($rows) { fputcsv($o, array_keys($rows[0])); foreach ($rows as $r) fputcsv($o, $r); }
+    if ($rows) {
+        fputcsv($o, array_keys($rows[0]), ',', '"', '');
+        foreach ($rows as $r) {
+            $safe_row = array_map(static function ($value) {
+                $value = (string)($value ?? '');
+                return preg_match('/^[\x00-\x20]*[=+\-@]/', $value) ? "'" . $value : $value;
+            }, array_values($r));
+            fputcsv($o, $safe_row, ',', '"', '');
+        }
+    }
     fclose($o); exit;
 }
 require 'includes/header.php';
-$types = ['payments' => 'Payments', 'outstanding' => 'Outstanding fees', 'students' => 'Students', 'lessons' => 'Lessons', 'results' => 'Test results', 'progress' => 'Student progress'];
 $money_cols = ['Fee', 'Paid', 'Balance', 'Amount'];
 ?>
 <div class="panel no-print">

@@ -30,6 +30,7 @@ if (in_array($role, ['Administrator', 'Receptionist'])) {
     <?php
 } elseif ($role === 'Instructor') {
     $iid = my_instructor_id();
+    if (!$iid) { echo '<div class="panel">Your account is not linked to an instructor profile yet. Please contact the front desk.</div>'; require 'includes/footer.php'; exit; }
     $st = $pdo->prepare("SELECT l.*, s.full_name student FROM lessons l JOIN students s USING(student_id) WHERE l.instructor_id=? AND l.lesson_date>=CURDATE() AND l.status='Scheduled' ORDER BY lesson_date, lesson_time LIMIT 10");
     $st->execute([$iid]);
     $rows = $st->fetchAll(); ?>

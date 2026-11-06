@@ -7,35 +7,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $act = $_POST['action'] ?? '';
     try {
+        $id = request_int($_POST['id'] ?? '0');
+        if ($id === false || $id < 0) throw new Exception('Invalid student ID.');
         if ($act === 'delete' && has_role('Administrator')) {
-            $pdo->prepare('DELETE FROM students WHERE student_id=?')->execute([(int)$_POST['id']]);
+            $pdo->prepare('DELETE FROM students WHERE student_id=?')->execute([$id]);
             flash('Student deleted.');
         } elseif ($act === 'save') {
-            $d = [trim($_POST['full_name']), $_POST['gender'], trim($_POST['id_number']), trim($_POST['phone']),
-                  trim($_POST['email']), trim($_POST['address']), trim($_POST['course']), (float)$_POST['course_fee']];
-            if ($d[0] === '' || $d[3] === '') throw new Exception('Name and phone are required.');
-            $id = (int)($_POST['id'] ?? 0);
+            $fields = [];
+            foreach (['full_name', 'gender', 'id_number', 'phone', 'email', 'address', 'course', 'course_fee'] as $field) {
+                $value = $_POST[$field] ?? '';
+                if (!is_string($value)) throw new Exception('Invalid student details.');
+                $fields[$field] = trim($value);
+            }
+            if ($fields['full_name'] === '' || $fields['phone'] === '') throw new Exception('Name and phone are required.');
+            if (!in_array($fields['gender'], ['Male', 'Female', 'Other'], true)) throw new Exception('Choose a valid gender.');
+            if (!in_array($fields['course'], ['Class A (Motorcycle)', 'Class B (Light vehicle)', 'Class C (Light truck)', 'Class D (PSV / Bus)', 'Refresher course'], true)) throw new Exception('Choose a valid course.');
+            if (!is_numeric($fields['course_fee']) || !is_finite((float)$fields['course_fee']) || (float)$fields['course_fee'] < 0) throw new Exception('Enter a valid non-negative course fee.');
+            if ($fields['email'] !== '' && !filter_var($fields['email'], FILTER_VALIDATE_EMAIL)) throw new Exception('Enter a valid email address.');
+            $d = [$fields['full_name'], $fields['gender'], $fields['id_number'], $fields['phone'],
+                  $fields['email'], $fields['address'], $fields['course'], (float)$fields['course_fee']];
             if ($id) {
                 $pdo->prepare('UPDATE students SET full_name=?,gender=?,id_number=?,phone=?,email=?,address=?,course=?,course_fee=? WHERE student_id=?')->execute([...$d, $id]);
                 flash('Student updated.');
             } else {
+                $pdo->beginTransaction();
                 $uid = null;
-                if (trim($_POST['username']) !== '') {
-                    if (strlen($_POST['password']) < 6) throw new Exception('Password must be at least 6 characters.');
-                    $uid = create_login(trim($_POST['username']), $_POST['password'], $d[0], 'Student');
+                $username = $_POST['username'] ?? '';
+                $password = $_POST['password'] ?? '';
+                if (!is_string($username) || !is_string($password)) throw new Exception('Invalid login details.');
+                if (trim($username) !== '') {
+                    if (strlen($password) < 6) throw new Exception('Password must be at least 6 characters.');
+                    $uid = create_login(trim($username), $password, $d[0], 'Student');
                 }
                 $pdo->prepare('INSERT INTO students (full_name,gender,id_number,phone,email,address,course,course_fee,user_id,reg_date) VALUES (?,?,?,?,?,?,?,?,?,CURDATE())')->execute([...$d, $uid]);
+                $pdo->commit();
                 flash('Student registered.');
             }
         }
     } catch (PDOException $ex) {
-        flash($ex->getCode() == 23000 ? 'That username already exists.' : 'Database error: ' . $ex->getMessage(), 'err');
-    } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('Student save failed: ' . $ex->getMessage());
+        flash($ex->getCode() == 23000 ? 'That username or student record conflicts with existing data.' : 'Unable to save the student because of a database error.', 'err');
+    } catch (Exception $ex) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        flash($ex->getMessage(), 'err');
+    }
     redirect('students.php');
 }
 
 $edit = null;
-if (isset($_GET['edit'])) { $s = $pdo->prepare('SELECT * FROM students WHERE student_id=?'); $s->execute([(int)$_GET['edit']]); $edit = $s->fetch(); }
+if (isset($_GET['edit'])) {
+    $editId = request_int($_GET['edit']);
+    if ($editId === false || $editId < 1) { http_response_code(400); exit('Invalid student ID.'); }
+    $s = $pdo->prepare('SELECT * FROM students WHERE student_id=?'); $s->execute([$editId]); $edit = $s->fetch();
+}
 $q = trim($_GET['q'] ?? '');
 $st = $pdo->prepare("SELECT s.*, s.course_fee - COALESCE((SELECT SUM(amount) FROM payments WHERE student_id=s.student_id),0) balance FROM students s WHERE s.full_name LIKE ? OR s.phone LIKE ? OR s.id_number LIKE ? ORDER BY s.student_id DESC");
 $st->execute(["%$q%", "%$q%", "%$q%"]);

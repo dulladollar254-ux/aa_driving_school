@@ -7,35 +7,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $act = $_POST['action'] ?? '';
     try {
+        $id = request_int($_POST['id'] ?? '0');
+        if ($id === false || $id < 0) throw new Exception('Invalid instructor ID.');
         if ($act === 'delete' && has_role('Administrator')) {
-            $pdo->prepare('DELETE FROM instructors WHERE instructor_id=?')->execute([(int)$_POST['id']]);
+            $pdo->prepare('DELETE FROM instructors WHERE instructor_id=?')->execute([$id]);
             flash('Instructor deleted.');
         } elseif ($act === 'save') {
-            $d = [trim($_POST['full_name']), trim($_POST['phone']), trim($_POST['email']), trim($_POST['license_no'])];
+            $fields = [];
+            foreach (['full_name', 'phone', 'email', 'license_no'] as $field) {
+                $value = $_POST[$field] ?? '';
+                if (!is_string($value)) throw new Exception('Invalid instructor details.');
+                $fields[$field] = trim($value);
+            }
+            $d = [$fields['full_name'], $fields['phone'], $fields['email'], $fields['license_no']];
             if ($d[0] === '' || $d[1] === '' || $d[3] === '') throw new Exception('Name, phone and license number are required.');
-            $id = (int)($_POST['id'] ?? 0);
+            if ($d[2] !== '' && !filter_var($d[2], FILTER_VALIDATE_EMAIL)) throw new Exception('Enter a valid email address.');
             if ($id) {
                 $pdo->prepare('UPDATE instructors SET full_name=?,phone=?,email=?,license_no=? WHERE instructor_id=?')->execute([...$d, $id]);
                 flash('Instructor updated.');
             } else {
+                $pdo->beginTransaction();
                 $uid = null;
-                if (trim($_POST['username']) !== '') {
-                    if (strlen($_POST['password']) < 6) throw new Exception('Password must be at least 6 characters.');
-                    $uid = create_login(trim($_POST['username']), $_POST['password'], $d[0], 'Instructor');
+                $username = $_POST['username'] ?? '';
+                $password = $_POST['password'] ?? '';
+                if (!is_string($username) || !is_string($password)) throw new Exception('Invalid login details.');
+                if (trim($username) !== '') {
+                    if (strlen($password) < 6) throw new Exception('Password must be at least 6 characters.');
+                    $uid = create_login(trim($username), $password, $d[0], 'Instructor');
                 }
                 $pdo->prepare('INSERT INTO instructors (full_name,phone,email,license_no,user_id) VALUES (?,?,?,?,?)')->execute([...$d, $uid]);
+                $pdo->commit();
                 flash('Instructor added.');
             }
         }
     } catch (PDOException $ex) {
-        $m = $ex->getCode() == 23000 ? 'Duplicate license/username, or the instructor still has lessons assigned.' : $ex->getMessage();
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('Instructor save failed: ' . $ex->getMessage());
+        $m = $ex->getCode() == 23000 ? 'Duplicate license/username, or the instructor still has lessons assigned.' : 'Unable to save the instructor because of a database error.';
         flash($m, 'err');
-    } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
+    } catch (Exception $ex) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        flash($ex->getMessage(), 'err');
+    }
     redirect('instructors.php');
 }
 
 $edit = null;
-if (isset($_GET['edit'])) { $s = $pdo->prepare('SELECT * FROM instructors WHERE instructor_id=?'); $s->execute([(int)$_GET['edit']]); $edit = $s->fetch(); }
+if (isset($_GET['edit'])) {
+    $editId = request_int($_GET['edit']);
+    if ($editId === false || $editId < 1) { http_response_code(400); exit('Invalid instructor ID.'); }
+    $s = $pdo->prepare('SELECT * FROM instructors WHERE instructor_id=?'); $s->execute([$editId]); $edit = $s->fetch();
+}
 $rows = $pdo->query('SELECT i.*, (SELECT COUNT(*) FROM lessons WHERE instructor_id=i.instructor_id) lessons FROM instructors i ORDER BY full_name')->fetchAll();
 require 'includes/header.php';
 ?>

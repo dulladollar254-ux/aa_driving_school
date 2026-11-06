@@ -8,22 +8,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $act = $_POST['action'] ?? '';
     try {
         if ($act === 'add') {
-            $name = trim($_POST['full_name']); $un = trim($_POST['username']);
-            if ($name === '' || $un === '' || strlen($_POST['password']) < 6) throw new Exception('Name, username and a password of 6+ characters are required.');
-            if (!in_array($_POST['role'], ['Administrator', 'Receptionist', 'Instructor', 'Student'], true)) throw new Exception('Bad role.');
-            create_login($un, $_POST['password'], $name, $_POST['role']);
-            flash('User created. Link Instructor/Student accounts by creating them from the Instructors/Students pages.');
+            $name = $_POST['full_name'] ?? '';
+            $un = $_POST['username'] ?? '';
+            $password = $_POST['password'] ?? '';
+            if (!is_string($name) || !is_string($un) || !is_string($password)) throw new Exception('Invalid user details.');
+            $name = trim($name); $un = trim($un);
+            if ($name === '' || $un === '' || strlen($password) < 6) throw new Exception('Name, username and a password of 6+ characters are required.');
+            if (!in_array($_POST['role'], ['Administrator', 'Receptionist'], true)) throw new Exception('Choose an administrator or receptionist role. Create instructor and student accounts from their profile forms.');
+            create_login($un, $password, $name, $_POST['role']);
+            flash('User created.');
         } elseif ($act === 'reset') {
-            if (strlen($_POST['password']) < 6) throw new Exception('Password must be at least 6 characters.');
-            $pdo->prepare('UPDATE users SET password=? WHERE user_id=?')->execute([password_hash($_POST['password'], PASSWORD_DEFAULT), (int)$_POST['id']]);
+            $password = $_POST['password'] ?? '';
+            if (!is_string($password) || strlen($password) < 6) throw new Exception('Password must be at least 6 characters.');
+            $id = request_int($_POST['id'] ?? null);
+            if ($id === false || $id < 1) throw new Exception('Invalid user ID.');
+            $pdo->prepare('UPDATE users SET password=? WHERE user_id=?')->execute([password_hash($password, PASSWORD_DEFAULT), $id]);
             flash('Password reset.');
         } elseif ($act === 'delete') {
-            if ((int)$_POST['id'] === user()['user_id']) throw new Exception('You cannot delete your own account.');
-            $pdo->prepare('DELETE FROM users WHERE user_id=?')->execute([(int)$_POST['id']]);
+            $id = request_int($_POST['id'] ?? null);
+            if ($id === false || $id < 1) throw new Exception('Invalid user ID.');
+            if ($id === (int)user()['user_id']) throw new Exception('You cannot delete your own account.');
+            $pdo->prepare('DELETE FROM users WHERE user_id=?')->execute([$id]);
             flash('User deleted.');
         }
     } catch (PDOException $ex) {
-        flash($ex->getCode() == 23000 ? 'That username already exists.' : $ex->getMessage(), 'err');
+        error_log('User management request failed: ' . $ex->getMessage());
+        flash($ex->getCode() == 23000 ? 'That username already exists.' : 'Unable to update users because of a database error.', 'err');
     } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
     redirect('users.php');
 }
@@ -36,7 +46,7 @@ require 'includes/header.php';
     <label>Full name <input name="full_name" required></label>
     <label>Username <input name="username" required autocomplete="off"></label>
     <label>Password <input type="password" name="password" required autocomplete="new-password"></label>
-    <label>Role <select name="role"><option>Administrator</option><option selected>Receptionist</option><option>Instructor</option><option>Student</option></select></label>
+    <label>Role <select name="role"><option>Administrator</option><option selected>Receptionist</option></select></label>
     <div><button class="btn">Create</button></div>
   </form>
 </div>

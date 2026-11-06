@@ -7,13 +7,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $act = $_POST['action'] ?? '';
     try {
+        $id = request_int($_POST['id'] ?? '0');
+        if ($id === false || $id < 0) throw new Exception('Invalid vehicle ID.');
         if ($act === 'delete' && has_role('Administrator')) {
-            $pdo->prepare('DELETE FROM vehicles WHERE vehicle_id=?')->execute([(int)$_POST['id']]);
+            $pdo->prepare('DELETE FROM vehicles WHERE vehicle_id=?')->execute([$id]);
             flash('Vehicle deleted.');
         } elseif ($act === 'save') {
-            $d = [strtoupper(trim($_POST['reg_no'])), trim($_POST['model']), trim($_POST['category']), $_POST['status']];
+            $regNo = $_POST['reg_no'] ?? '';
+            $model = $_POST['model'] ?? '';
+            $category = $_POST['category'] ?? '';
+            $status = $_POST['status'] ?? '';
+            if (!is_string($regNo) || !is_string($model) || !is_string($category) || !is_string($status)) throw new Exception('Invalid vehicle details.');
+            if (!in_array($category, ['Class A', 'Class B', 'Class C', 'Class D'], true) || !in_array($status, ['Available', 'Maintenance'], true)) throw new Exception('Choose a valid vehicle category and status.');
+            $d = [strtoupper(trim($regNo)), trim($model), $category, $status];
             if ($d[0] === '' || $d[1] === '') throw new Exception('Registration number and model are required.');
-            $id = (int)($_POST['id'] ?? 0);
             if ($id) {
                 $pdo->prepare('UPDATE vehicles SET reg_no=?,model=?,category=?,status=? WHERE vehicle_id=?')->execute([...$d, $id]);
                 flash('Vehicle updated.');
@@ -23,13 +30,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     } catch (PDOException $ex) {
-        flash($ex->getCode() == 23000 ? 'That registration number already exists.' : $ex->getMessage(), 'err');
+        error_log('Vehicle save failed: ' . $ex->getMessage());
+        flash($ex->getCode() == 23000 ? 'That registration number already exists.' : 'Unable to save the vehicle because of a database error.', 'err');
     } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
     redirect('vehicles.php');
 }
 
 $edit = null;
-if (isset($_GET['edit'])) { $s = $pdo->prepare('SELECT * FROM vehicles WHERE vehicle_id=?'); $s->execute([(int)$_GET['edit']]); $edit = $s->fetch(); }
+if (isset($_GET['edit'])) {
+    $editId = request_int($_GET['edit']);
+    if ($editId === false || $editId < 1) { http_response_code(400); exit('Invalid vehicle ID.'); }
+    $s = $pdo->prepare('SELECT * FROM vehicles WHERE vehicle_id=?'); $s->execute([$editId]); $edit = $s->fetch();
+}
 $rows = $pdo->query('SELECT * FROM vehicles ORDER BY reg_no')->fetchAll();
 require 'includes/header.php';
 ?>

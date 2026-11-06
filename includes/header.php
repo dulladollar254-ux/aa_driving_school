@@ -31,7 +31,7 @@ $menu = [
     <?php endforeach; ?>
   </nav>
   <div class="who"><?= e(user()['full_name']) ?><br><small><?= e($role) ?></small>
-    <a href="logout.php" class="logout">Log out</a></div>
+    <form method="post" action="logout.php" class="logout-form"><?= csrf_field() ?><button class="logout">Log out</button></form></div>
 </aside>
 <main class="content">
 <h1><?= e($page_title ?? '') ?></h1>

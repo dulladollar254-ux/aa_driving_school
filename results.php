@@ -3,7 +3,8 @@ require 'config.php';
 require_role(['Administrator', 'Instructor', 'Student']);
 $page_title = 'Test Results'; $active = 'results.php';
 $manager = has_role('Administrator', 'Instructor');
-$sid = has_role('Student') ? my_student_id() : null;
+$isStudent = has_role('Student');
+$sid = $isStudent ? my_student_id() : null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
@@ -11,22 +12,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$manager) throw new Exception('Not allowed.');
         if (($_POST['action'] ?? '') === 'delete') {
             if (!has_role('Administrator')) throw new Exception('Only the administrator can delete results.');
-            $pdo->prepare('DELETE FROM test_results WHERE result_id=?')->execute([(int)$_POST['id']]);
+            $id = request_int($_POST['id'] ?? null);
+            if ($id === false || $id < 1) throw new Exception('Invalid result ID.');
+            $pdo->prepare('DELETE FROM test_results WHERE result_id=?')->execute([$id]);
             flash('Result deleted.');
         } else {
-            $score = (int)$_POST['score'];
-            if (!(int)$_POST['student_id'] || $score < 0 || $score > 100) throw new Exception('Select a student and enter a score between 0 and 100.');
-            if (!in_array($_POST['test_type'], ['Theory', 'Practical'], true)) throw new Exception('Bad test type.');
+            $studentValue = $_POST['student_id'] ?? null;
+            $scoreValue = $_POST['score'] ?? null;
+            $studentId = request_int($studentValue);
+            $score = request_int($scoreValue);
+            if ($studentId === false || $studentId < 1 || $score === false || $score < 0 || $score > 100) throw new Exception('Select a student and enter a score between 0 and 100.');
+            $testType = $_POST['test_type'] ?? '';
+            if (!in_array($testType, ['Theory', 'Practical'], true)) throw new Exception('Bad test type.');
+            $date = $_POST['test_date'] ?? '';
+            if ($date === '') $date = date('Y-m-d');
+            if (!valid_date($date)) throw new Exception('Enter a valid test date.');
+            $remarks = $_POST['remarks'] ?? '';
+            if (!is_string($remarks)) throw new Exception('Enter valid remarks.');
             $pdo->prepare('INSERT INTO test_results (student_id,test_type,test_date,score,remarks) VALUES (?,?,?,?,?)')
-                ->execute([(int)$_POST['student_id'], $_POST['test_type'], $_POST['test_date'] ?: date('Y-m-d'), $score, trim($_POST['remarks'])]);
+                ->execute([$studentId, $testType, $date, $score, trim($remarks)]);
             flash('Result recorded.');
         }
+    } catch (PDOException $ex) {
+        error_log('Test result request failed: ' . $ex->getMessage());
+        flash('Unable to save the result because of a database error.', 'err');
     } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
     redirect('results.php');
 }
 
-$sql = 'SELECT r.*, s.full_name student FROM test_results r JOIN students s USING(student_id)' . ($sid ? ' WHERE r.student_id=?' : '') . ' ORDER BY test_date DESC, result_id DESC LIMIT 200';
-$st = $pdo->prepare($sql); $st->execute($sid ? [$sid] : []); $rows = $st->fetchAll();
+$sql = 'SELECT r.*, s.full_name student FROM test_results r JOIN students s USING(student_id)' . ($isStudent ? ' WHERE r.student_id=?' : '') . ' ORDER BY test_date DESC, result_id DESC LIMIT 200';
+$st = $pdo->prepare($sql); $st->execute($isStudent ? [$sid] : []); $rows = $st->fetchAll();
 $studentsL = $manager ? $pdo->query('SELECT student_id, full_name FROM students ORDER BY full_name')->fetchAll() : [];
 require 'includes/header.php';
 ?>
@@ -42,6 +57,9 @@ require 'includes/header.php';
     <div><button class="btn">Save result</button></div>
   </form>
 </div>
+<?php endif; ?>
+<?php if ($isStudent && !$sid): ?>
+<div class="panel">Your account is not linked to a student profile yet. Please contact the front desk.</div>
 <?php endif; ?>
 <div class="panel"><table><tr><th>Date</th><th>Student</th><th>Test</th><th>Score</th><th>Outcome</th><th>Remarks</th><th></th></tr>
 <?php foreach ($rows as $r): $pass = $r['score'] >= PASS_MARK; ?>

@@ -11,23 +11,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$manager) throw new Exception('Not allowed.');
         if (($_POST['action'] ?? '') === 'delete') {
             if (!has_role('Administrator')) throw new Exception('Only the administrator can delete payments.');
-            $pdo->prepare('DELETE FROM payments WHERE payment_id=?')->execute([(int)$_POST['id']]);
+            $id = request_int($_POST['id'] ?? null);
+            if ($id === false || $id < 1) throw new Exception('Invalid payment ID.');
+            $pdo->prepare('DELETE FROM payments WHERE payment_id=?')->execute([$id]);
             flash('Payment deleted.');
         } else {
-            $stu = (int)$_POST['student_id']; $amt = (float)$_POST['amount'];
-            if (!$stu || $amt <= 0) throw new Exception('Select a student and enter an amount greater than zero.');
-            if (!in_array($_POST['payment_method'], ['Cash', 'M-Pesa', 'Bank'], true)) throw new Exception('Bad payment method.');
+            $studentId = $_POST['student_id'] ?? null;
+            $stu = request_int($studentId);
+            $amount = $_POST['amount'] ?? null;
+            $amt = is_string($amount) && is_numeric($amount) ? (float)$amount : 0;
+            if ($stu === false || $stu < 1 || !is_finite($amt) || $amt <= 0 || $amt > 99999999.99) throw new Exception('Select a student and enter a valid amount greater than zero.');
+            $method = $_POST['payment_method'] ?? '';
+            if (!in_array($method, ['Cash', 'M-Pesa', 'Bank'], true)) throw new Exception('Bad payment method.');
+            $date = $_POST['payment_date'] ?? '';
+            if ($date === '') $date = date('Y-m-d');
+            if (!valid_date($date)) throw new Exception('Enter a valid payment date.');
+            $reference = $_POST['reference'] ?? '';
+            if (!is_string($reference) || strlen($reference) > 50) throw new Exception('Enter a valid payment reference (50 characters maximum).');
             $pdo->prepare('INSERT INTO payments (student_id,amount,payment_date,payment_method,reference,received_by) VALUES (?,?,?,?,?,?)')
-                ->execute([$stu, $amt, $_POST['payment_date'] ?: date('Y-m-d'), $_POST['payment_method'], trim($_POST['reference']), user()['user_id']]);
+                ->execute([$stu, $amt, $date, $method, trim($reference), user()['user_id']]);
             $newId = $pdo->lastInsertId();
             flash('Payment recorded. Balance now ' . money(max(student_balance($stu), 0)) . '.');
             redirect('receipt.php?id=' . $newId);
         }
+    } catch (PDOException $ex) {
+        error_log('Payment request failed: ' . $ex->getMessage());
+        flash('Unable to save the payment because of a database error.', 'err');
     } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
     redirect('payments.php');
 }
 
-if ($sid) {
+if (has_role('Student')) {
     $st = $pdo->prepare('SELECT p.*, s.full_name student FROM payments p JOIN students s USING(student_id) WHERE p.student_id=? ORDER BY payment_date DESC, payment_id DESC');
     $st->execute([$sid]);
 } else {
@@ -49,6 +63,9 @@ require 'includes/header.php';
     <div><button class="btn">Save &amp; print receipt</button></div>
   </form>
 </div>
+<?php endif; ?>
+<?php if (has_role('Student') && !$sid): ?>
+<div class="panel">Your account is not linked to a student profile yet. Please contact the front desk.</div>
 <?php endif; ?>
 <div class="panel"><table><tr><th>Receipt</th><th>Date</th><th>Student</th><th>Amount</th><th>Method</th><th>Reference</th><th></th></tr>
 <?php foreach ($rows as $r): ?>

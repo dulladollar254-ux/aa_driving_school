@@ -5,13 +5,18 @@ if (user()) redirect('dashboard.php');
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
-    $st = $pdo->prepare('SELECT * FROM users WHERE username=?');
-    $st->execute([trim($_POST['username'] ?? '')]);
-    $u = $st->fetch();
-    if ($u && password_verify($_POST['password'] ?? '', $u['password'])) {
-        session_regenerate_id(true);
-        $_SESSION['user'] = ['user_id' => $u['user_id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']];
-        redirect('dashboard.php');
+    $username = $_POST['username'] ?? '';
+    $password = $_POST['password'] ?? '';
+    if (is_string($username) && is_string($password)) {
+        $st = $pdo->prepare('SELECT * FROM users WHERE username=?');
+        $st->execute([trim($username)]);
+        $u = $st->fetch();
+        if ($u && password_verify($password, $u['password'])) {
+            session_regenerate_id(true);
+            $_SESSION['csrf'] = bin2hex(random_bytes(32));
+            $_SESSION['user'] = ['user_id' => $u['user_id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']];
+            redirect('dashboard.php');
+        }
     }
     $error = 'Invalid username or password.';
 }

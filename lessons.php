@@ -11,10 +11,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $act = $_POST['action'] ?? '';
     try {
         if ($act === 'save' && $manager) {
-            $stu = (int)$_POST['student_id']; $ins = (int)$_POST['instructor_id'];
-            $veh = $_POST['vehicle_id'] !== '' ? (int)$_POST['vehicle_id'] : null;
-            $date = $_POST['lesson_date']; $time = $_POST['lesson_time']; $id = (int)($_POST['id'] ?? 0);
-            if (!$stu || !$ins || !$date || !$time) throw new Exception('Student, instructor, date and time are required.');
+            $stu = request_int($_POST['student_id'] ?? null);
+            $ins = request_int($_POST['instructor_id'] ?? null);
+            $vehicleValue = $_POST['vehicle_id'] ?? '';
+            $veh = $vehicleValue === '' ? null : request_int($vehicleValue);
+            $date = $_POST['lesson_date'] ?? null;
+            $time = $_POST['lesson_time'] ?? null;
+            $id = request_int($_POST['id'] ?? '0');
+            if ($stu === false || $stu < 1 || $ins === false || $ins < 1 || ($veh !== null && ($veh === false || $veh < 1)) || $id === false || $id < 0 || !valid_date($date) || !is_string($time) || !preg_match('/^\d{2}:\d{2}$/', $time)) throw new Exception('Select a student and instructor, and enter a valid date and time.');
             // conflict detection: same slot for the instructor, vehicle or student
             $c = $pdo->prepare("SELECT COUNT(*) FROM lessons WHERE lesson_date=? AND lesson_time=? AND status<>'Cancelled' AND schedule_id<>? AND (instructor_id=? OR student_id=? OR (vehicle_id IS NOT NULL AND vehicle_id=?))");
             $c->execute([$date, $time, $id, $ins, $stu, $veh]);
@@ -23,7 +27,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $v = $pdo->prepare('SELECT status FROM vehicles WHERE vehicle_id=?'); $v->execute([$veh]);
                 if ($v->fetchColumn() === 'Maintenance') throw new Exception('That vehicle is under maintenance.');
             }
-            $d = [$stu, $ins, $veh, $date, $time, trim($_POST['topic']), $_POST['status'] ?? 'Scheduled'];
+            $topic = $_POST['topic'] ?? '';
+            if (!is_string($topic)) throw new Exception('Enter a valid lesson topic.');
+            $status = $_POST['status'] ?? 'Scheduled';
+            if (!in_array($status, ['Scheduled', 'Completed', 'Cancelled'], true)) throw new Exception('Bad status.');
+            $d = [$stu, $ins, $veh, $date, $time, trim($topic), $status];
             if ($id) {
                 $pdo->prepare('UPDATE lessons SET student_id=?,instructor_id=?,vehicle_id=?,lesson_date=?,lesson_time=?,topic=?,status=? WHERE schedule_id=?')->execute([...$d, $id]);
                 flash('Lesson updated.');
@@ -32,29 +40,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 flash('Lesson scheduled.');
             }
         } elseif ($act === 'status') {
-            $id = (int)$_POST['id']; $new = $_POST['status'];
+            $id = request_int($_POST['id'] ?? null);
+            $new = $_POST['status'] ?? '';
+            if ($id === false || $id < 1) throw new Exception('Invalid lesson ID.');
             if (!in_array($new, ['Scheduled', 'Completed', 'Cancelled'], true)) throw new Exception('Bad status.');
             if ($iid) { // instructors may only update their own lessons
-                $pdo->prepare('UPDATE lessons SET status=?, notes=? WHERE schedule_id=? AND instructor_id=?')->execute([$new, trim($_POST['notes'] ?? ''), $id, $iid]);
+                if (!in_array($new, ['Completed', 'Cancelled'], true)) throw new Exception('Instructors may only complete or cancel lessons.');
+                $notes = $_POST['notes'] ?? '';
+                if (!is_string($notes)) throw new Exception('Enter valid lesson notes.');
+                $pdo->prepare('UPDATE lessons SET status=?, notes=? WHERE schedule_id=? AND instructor_id=?')->execute([$new, trim($notes), $id, $iid]);
             } elseif ($manager) {
                 $pdo->prepare('UPDATE lessons SET status=? WHERE schedule_id=?')->execute([$new, $id]);
             } else throw new Exception('Not allowed.');
             flash('Lesson marked ' . $new . '.');
         } elseif ($act === 'delete' && has_role('Administrator')) {
-            $pdo->prepare('DELETE FROM lessons WHERE schedule_id=?')->execute([(int)$_POST['id']]);
+            $id = request_int($_POST['id'] ?? null);
+            if ($id === false || $id < 1) throw new Exception('Invalid lesson ID.');
+            $pdo->prepare('DELETE FROM lessons WHERE schedule_id=?')->execute([$id]);
             flash('Lesson deleted.');
         }
+    } catch (PDOException $ex) {
+        error_log('Lesson update failed: ' . $ex->getMessage());
+        flash('Unable to save the lesson because of a database error.', 'err');
     } catch (Exception $ex) { flash($ex->getMessage(), 'err'); }
     redirect('lessons.php');
 }
 
 $edit = null;
-if ($manager && isset($_GET['edit'])) { $s = $pdo->prepare('SELECT * FROM lessons WHERE schedule_id=?'); $s->execute([(int)$_GET['edit']]); $edit = $s->fetch(); }
+if ($manager && isset($_GET['edit'])) {
+    $editId = request_int($_GET['edit']);
+    if ($editId === false || $editId < 1) { http_response_code(400); exit('Invalid lesson ID.'); }
+    $s = $pdo->prepare('SELECT * FROM lessons WHERE schedule_id=?'); $s->execute([$editId]); $edit = $s->fetch();
+}
 
 $where = '1=1'; $params = [];
-if ($iid) { $where = 'l.instructor_id=?'; $params[] = $iid; }
-if ($sid) { $where = 'l.student_id=?'; $params[] = $sid; }
-$from = $_GET['from'] ?? ''; if ($from) { $where .= ' AND l.lesson_date>=?'; $params[] = $from; }
+if (has_role('Instructor')) {
+    if ($iid) { $where = 'l.instructor_id=?'; $params[] = $iid; }
+    else $where = '1=0';
+}
+if (has_role('Student')) {
+    if ($sid) { $where = 'l.student_id=?'; $params[] = $sid; }
+    else $where = '1=0';
+}
+$from = $_GET['from'] ?? '';
+if ($from !== '') {
+    if (!valid_date($from)) { http_response_code(400); exit('Choose a valid start date.'); }
+    $where .= ' AND l.lesson_date>=?'; $params[] = $from;
+}
 $list = $pdo->prepare("SELECT l.*, s.full_name student, i.full_name instructor, v.reg_no FROM lessons l JOIN students s USING(student_id) JOIN instructors i USING(instructor_id) LEFT JOIN vehicles v USING(vehicle_id) WHERE $where ORDER BY l.lesson_date DESC, l.lesson_time DESC LIMIT 200");
 $list->execute($params); $rows = $list->fetchAll();
 if ($manager) {
@@ -80,6 +112,9 @@ $badge = ['Scheduled' => 'b-info', 'Completed' => 'b-ok', 'Cancelled' => 'b-err'
     <div><button class="btn"><?= $edit ? 'Update' : 'Schedule' ?></button> <?php if ($edit) echo '<a class="btn grey" href="lessons.php">Cancel</a>'; ?></div>
   </form>
 </div>
+<?php endif; ?>
+<?php if ((has_role('Instructor') && !$iid) || (has_role('Student') && !$sid)): ?>
+<div class="panel">Your account is not linked to a profile yet. Please contact the front desk.</div>
 <?php endif; ?>
 <div class="panel">
   <form class="toolbar"><label style="display:flex;gap:8px;align-items:center">From <input type="date" name="from" value="<?= e($from) ?>"></label><button class="btn sm">Filter</button></form>
